@@ -1,0 +1,68 @@
+"""Tests for the /analytics endpoint (LangChain variant).
+
+Runs on the keyless `fake` path through a FastAPI test client: a query writes a
+trace, and /analytics returns it in the documented per-query shape. Traces go to
+a temp dir so the repo is never touched.
+"""
+from __future__ import annotations
+
+import importlib
+
+from fastapi.testclient import TestClient
+
+
+def _client(tmp_path, monkeypatch) -> TestClient:
+    monkeypatch.setenv("DOCS_DIR", "data/docs")
+    monkeypatch.setenv("TRACE_DIR", str(tmp_path / "traces"))
+    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fake")
+    from src.rag_lc import api
+    importlib.reload(api)
+    return TestClient(api.app)
+
+
+def test_analytics_empty_before_any_query(tmp_path, monkeypatch):
+    """With no traces yet, /analytics returns an empty list."""
+    client = _client(tmp_path, monkeypatch)
+    r = client.get("/analytics")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 0
+    assert body["queries"] == []
+
+
+def test_analytics_records_a_query(tmp_path, monkeypatch):
+    """A query is traced and surfaces in /analytics with the documented shape."""
+    client = _client(tmp_path, monkeypatch)
+    client.post("/query", json={"question": "What are the rate limits?"})
+    r = client.get("/analytics")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["count"] == 1
+    row = body["queries"][0]
+    for key in ("ts", "question", "answer_preview", "timings_ms", "tokens",
+                "cost_usd", "n_contexts", "sources"):
+        assert key in row
+
+
+def test_analytics_respects_limit(tmp_path, monkeypatch):
+    """The `limit` param bounds the number of returned rows to the most recent."""
+    client = _client(tmp_path, monkeypatch)
+    for q in ("What are the rate limits?", "How do I rotate a key?", "What plans exist?"):
+        client.post("/query", json={"question": q})
+    r = client.get("/analytics", params={"limit": 2})
+    assert r.status_code == 200
+    assert r.json()["count"] == 2
+
+
+def test_analytics_limit_above_count_returns_all(tmp_path, monkeypatch):
+    """A limit larger than the trace count returns ALL traces. Regression: a
+    len-relative slice previously dropped the oldest rows when count < limit < 2*count
+    (e.g. 3 traces + limit=4 returned only 1)."""
+    client = _client(tmp_path, monkeypatch)
+    for q in ("What are the rate limits?", "How do I rotate a key?", "What plans exist?"):
+        client.post("/query", json={"question": q})
+    for limit in (4, 5, 100):  # in/above the previously-buggy band for count=3
+        r = client.get("/analytics", params={"limit": limit})
+        assert r.status_code == 200
+        assert r.json()["count"] == 3, f"limit={limit} should return all 3 traces"

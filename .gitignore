@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Generated at runtime (traces / eval reports / indexes)
+traces/
+eval/results/
+eval/traces/
+data/index/
+*.npz
+
+# Streamlit (config.toml is committed; secrets are not)
+.streamlit/secrets.toml
+
+# OS / editor / assistant
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# pytest / ruff
+.pytest_cache/
+.ruff_cache/
+
+# Personal docs / study material (kept local, not published).
+# Anchored to the repo root so it never matches the data/docs corpus.
+/docs/

@@ -1,0 +1,34 @@
+# Keyless base (fake providers, InMemory vector store, BM25 hybrid). No API key.
+langchain>=0.3
+langchain-core>=0.3
+langchain-community>=0.3
+langchain-classic>=1.0        # EnsembleRetriever (LangChain v1)
+langchain-text-splitters>=0.3
+rank-bm25>=0.2
+pydantic>=2.6
+pydantic-settings>=2.2
+python-dotenv>=1.0
+fastapi>=0.111
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9       # multipart/form-data parsing for /upload
+streamlit>=1.36               # multipage UI over the API
+requests>=2.31                # UI -> API calls
+pandas>=2.0                   # analytics + evaluation dashboards
+
+# Document loading (.html / .pdf uploads)
+beautifulsoup4>=4.12
+pypdf>=4.2
+
+# Dev
+pytest>=8.2
+ruff>=0.5
+
+# --- Optional: Ragas generation metrics for `make eval` on the OpenAI path ---
+# pip install "ragas>=0.1.9,<0.2" datasets
+
+# --- Optional real providers (install only if you use them) ---
+# OpenAI path:            pip install langchain-openai
+# Local Hugging Face path: pip install langchain-huggingface transformers sentence-transformers torch
+
+# --- Optional: Postgres + pgvector vector store (VECTOR_BACKEND=pgvector) ---
+# pgvector path:          pip install langchain-postgres "psycopg[binary]>=3.1"

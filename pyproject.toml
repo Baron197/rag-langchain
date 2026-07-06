@@ -1,0 +1,17 @@
+[project]
+name = "rag-langchain"
+version = "0.4.0"
+description = "LangChain variant of the from-scratch RAG Knowledge Assistant."
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "UP017"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
