@@ -1,0 +1,32 @@
+# Runtime dependencies for the API container only (see Dockerfile). The UI
+# (streamlit) and eval (ragas, datasets) deps are intentionally excluded to keep
+# the image lean. Includes the OpenAI (langchain-openai) and pgvector
+# (langchain-postgres + psycopg) providers so openai mode and VECTOR_BACKEND=pgvector
+# work in the container. Keep versions in sync with requirements.txt.
+
+# LangChain core + hybrid retrieval
+langchain>=0.3
+langchain-core>=0.3
+langchain-community>=0.3
+langchain-classic>=1.0        # EnsembleRetriever (LangChain v1)
+langchain-text-splitters>=0.3
+rank-bm25>=0.2
+
+# Config + API
+pydantic>=2.6
+pydantic-settings>=2.2
+python-dotenv>=1.0
+fastapi>=0.111
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9       # required: /upload uses multipart/form-data
+
+# Document loading (.html / .pdf uploads)
+beautifulsoup4>=4.12
+pypdf>=4.2
+
+# OpenAI provider
+langchain-openai>=0.2
+
+# Postgres + pgvector backend
+langchain-postgres>=0.0.9
+psycopg[binary]>=3.1

@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     enable_cache: bool = True
     cache_size: int = 256
 
+    # API auth (optional): if set, the cost/mutation endpoints (/query, /ingest,
+    # /upload) require a matching `X-API-Key` header. Empty (default) = open, so
+    # keyless/local use is unchanged. The Streamlit UI forwards it automatically.
+    api_key: str = ""
+
     docs_dir: Path = Path("data/docs")
     trace_dir: Path = Path("traces")  # per-query JSONL traces (observability / metrics)
     # Where the eval harness writes reports and /eval-results reads them; anchored
