@@ -115,6 +115,25 @@ Set `RETRIEVAL_MODE=hybrid` to fuse **BM25** (keyword) with the **vector**
 retriever via LangChain's `EnsembleRetriever` (reciprocal-rank-fusion style
 weighting) — better ranking for exact tokens like error codes and API names.
 
+## Deploy — Docker & free-tier cloud
+
+The full stack — Postgres + `pgvector` (`langchain-postgres`), the API, and the
+Streamlit UI — comes up with one command, on your laptop or a single cloud VM:
+
+```bash
+docker compose up -d --build     # db + api + ui   (UI :8501 · API :8000)
+docker compose run --rm eval     # optional: populate the Evaluation page (Ragas included)
+```
+
+For a real deployment put `LLM_PROVIDER=openai`, `EMBEDDING_PROVIDER=openai`,
+`VECTOR_BACKEND=pgvector` and `OPENAI_API_KEY` in `.env`; set `APP_PASSWORD` (UI
+login) and `API_KEY` (gates `/query`, `/ingest`, `/upload`) to protect a public
+host. The API image ingests the corpus into pgvector on start, then serves.
+
+It fits a **free-tier VM** — Google Cloud Always-Free `e2-micro`, or Oracle Cloud
+Always-Free Ampere **A1** (2 vCPU / 12 GB). The whole stack is `arm64`-clean, so it
+runs natively on Oracle's ARM instances.
+
 ## Project structure
 
 ```
@@ -157,9 +176,10 @@ tests/            keyless end-to-end tests
   free, marked `⚡`), an evaluation harness that writes reports for the Evaluation
   dashboard, and API hardening (a request-size guard, threadpool re-index, and a
   lock-guarded pipeline singleton).
-- The main deliberate difference is storage: this variant uses an
-  `InMemoryVectorStore` (the from-scratch repo offers a NumPy store or Postgres +
-  `pgvector`); LangChain's `PGVector` would slot in the same way.
+- Storage is swappable by config: the default is an `InMemoryVectorStore` (zero
+  external services), and `VECTOR_BACKEND=pgvector` uses LangChain's `PGVector`
+  (Postgres + pgvector) for persistence — the backend the Docker / cloud deploy
+  runs on. (The from-scratch repo offers a NumPy store or the same pgvector.)
 
 ## A note on the keyless `fake` mode
 
