@@ -1,15 +1,20 @@
 # Dependencies for the evaluation harness (see Dockerfile.eval): the LangChain
-# RAG pipeline + Ragas generation metrics. Leaner than requirements.txt (no
-# API/UI server libs). Keep versions in sync with requirements.txt.
+# RAG pipeline + Ragas generation metrics.
+#
+# NOTE: Ragas 0.1.x pins langchain-core<0.3, so the EVAL image uses the langchain
+# 0.2 line -- a coherent, ragas-compatible stack (the same one the tests run on).
+# The runtime API image (requirements-api.txt) stays on the modern langchain; the
+# eval only builds + scores the pipeline, which the code supports on both lines.
+# (langchain-classic is dropped here -- on 0.2 EnsembleRetriever imports from
+# langchain.retrievers, per components.py's try/except.)
 
-# LangChain core + hybrid retrieval + providers
-langchain>=0.3
-langchain-core>=0.3
-langchain-community>=0.3
-langchain-classic>=1.0
-langchain-text-splitters>=0.3
+# LangChain (0.2 line -- required for ragas 0.1.x compatibility)
+langchain>=0.2,<0.3
+langchain-core>=0.2,<0.3
+langchain-community>=0.2,<0.3
+langchain-text-splitters>=0.2,<0.3
 rank-bm25>=0.2
-langchain-openai>=0.2
+langchain-openai>=0.1,<0.2
 langchain-postgres>=0.0.9
 
 # Config
@@ -24,6 +29,6 @@ pypdf>=4.2
 # pgvector driver (eval connects to the same Postgres as the API)
 psycopg[binary]>=3.1
 
-# Generation-quality metrics (pulls datasets/pandas transitively)
+# Generation-quality metrics (Ragas 0.1.x -- forces the langchain 0.2 line above)
 ragas>=0.1.9,<0.2
 datasets>=2.19

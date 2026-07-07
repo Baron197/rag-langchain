@@ -32,7 +32,7 @@ strip (latency split · cost · contexts · tokens), and the retrieved source pa
 | **Corpus** — browse exactly what the vector store indexed | **Analytics** — per-query cost / latency / token dashboard |
 |:--:|:--:|
 | [![Corpus page](assets/screenshots/corpus.png)](assets/screenshots/corpus.png) | [![Analytics dashboard](assets/screenshots/analytics.png)](assets/screenshots/analytics.png) |
-| **Evaluation** — retrieval-quality dashboard (recall@k · MRR · refusal) | **Dark mode** — full light / dark theming |
+| **Evaluation** — retrieval metrics + Ragas (keyless run shown; Ragas on the OpenAI path) | **Dark mode** — full light / dark theming |
 | [![Evaluation dashboard](assets/screenshots/evaluation.png)](assets/screenshots/evaluation.png) | [![Dark mode](assets/screenshots/ask-dark.png)](assets/screenshots/ask-dark.png) |
 
 ---
@@ -122,7 +122,7 @@ Streamlit UI — comes up with one command, on your laptop or a single cloud VM:
 
 ```bash
 docker compose up -d --build     # db + api + ui   (UI :8501 · API :8000)
-docker compose run --rm eval     # optional: populate the Evaluation page (retrieval metrics)
+docker compose run --rm eval     # optional: populate the Evaluation page (retrieval + Ragas)
 ```
 
 For a real deployment put `LLM_PROVIDER=openai`, `EMBEDDING_PROVIDER=openai`,
