@@ -8,6 +8,7 @@ Endpoints:
   GET  /metrics      -> aggregate cost/latency/throughput from recorded traces
   GET  /analytics    -> per-query trace records for the analytics dashboard
   GET  /eval-results -> evaluation reports (retrieval/Ragas/A-B) for the eval dashboard
+  GET  /documents    -> the indexed source corpus (files + chunks) for the Corpus page
 
 The pipeline (and its in-memory index) is built once at first use and reused; it
 is rebuilt on /ingest and /upload. Access is guarded by a lock (FastAPI runs sync
@@ -27,6 +28,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .config import get_settings
+from .ingest import _read_file
 from .pipeline import RAGPipelineLC
 
 logger = logging.getLogger("rag_lc.api")
@@ -246,4 +248,69 @@ def eval_results(limit: int = 50) -> dict:
         "results_dir": str(results_dir),
         "eval_runs": evals[:limit],
         "compare_runs": compares[:limit],
+    }
+
+
+@app.get("/documents")
+def documents() -> dict:
+    """List the source documents the index was built from -- filename, type, size,
+    and how many chunks each produced. Read-only; the corpus is changed via /ingest
+    and /upload."""
+    p = get_pipeline()
+    docs_dir = Path(p.settings.docs_dir)
+    # Chunk counts from the pipeline's loaded chunks (what /health reports as indexed).
+    counts: dict[str, int] = {}
+    for d in p.docs:
+        src = d.metadata.get("source", "?")
+        counts[src] = counts.get(src, 0) + 1
+    items: list[dict] = []
+    if docs_dir.exists():
+        for path in sorted(docs_dir.rglob("*")):
+            if path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES:
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    size = 0
+                items.append({
+                    "name": path.name,
+                    "suffix": path.suffix.lower().lstrip("."),
+                    "size_bytes": size,
+                    "chunks": counts.get(path.name, 0),
+                })
+    return {"docs_dir": str(docs_dir), "total_chunks": len(p.docs), "documents": items}
+
+
+@app.get("/documents/{name}")
+def document(name: str) -> dict:
+    """Return one source document: the full text the ingester extracted from it
+    (what got chunked + embedded) plus the chunks the index holds for it."""
+    p = get_pipeline()
+    safe = Path(name).name  # strip any directory components (path-traversal guard)
+    path = Path(p.settings.docs_dir) / safe
+    if safe != name or not path.is_file() or path.suffix.lower() not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=404, detail=f"Document not found: {name}")
+    text = _read_file(path)  # md/txt raw, html stripped, pdf extracted -- as ingested
+    chunks = sorted(
+        (d for d in p.docs if d.metadata.get("source") == safe),
+        key=lambda d: d.metadata.get("chunk_index", 0),
+    )
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    return {
+        "name": safe,
+        "suffix": path.suffix.lower().lstrip("."),
+        "size_bytes": size,
+        "chars": len(text),
+        "n_chunks": len(chunks),
+        "text": text,
+        "chunks": [
+            {
+                "index": d.metadata.get("chunk_index", i),
+                "id": f"{safe}::{d.metadata.get('chunk_index', i)}",
+                "text": d.page_content,
+            }
+            for i, d in enumerate(chunks)
+        ],
     }
