@@ -19,6 +19,24 @@
 
 ---
 
+## Screenshots
+
+*The Streamlit console is a thin client over the LangChain FastAPI service. Shown
+here in keyless `fake` mode; the exact same UI runs on OpenAI or local Hugging Face.*
+
+**Ask** — grounded answers with inline `[n]` citations, a per-query telemetry
+strip (latency split · cost · contexts · tokens), and the retrieved source passages:
+
+[![Ask page — grounded answer with citations and telemetry](assets/screenshots/ask.png)](assets/screenshots/ask.png)
+
+| **Corpus** — browse exactly what the vector store indexed | **Analytics** — per-query cost / latency / token dashboard |
+|:--:|:--:|
+| [![Corpus page](assets/screenshots/corpus.png)](assets/screenshots/corpus.png) | [![Analytics dashboard](assets/screenshots/analytics.png)](assets/screenshots/analytics.png) |
+| **Evaluation** — retrieval-quality dashboard (keyless run; Ragas populates on the OpenAI path) | **Dark mode** — full light / dark theming |
+| [![Evaluation dashboard](assets/screenshots/evaluation.png)](assets/screenshots/evaluation.png) | [![Dark mode](assets/screenshots/ask-dark.png)](assets/screenshots/ask-dark.png) |
+
+---
+
 ## What this demonstrates (LangChain idioms)
 
 | Concern | LangChain building block used here |
@@ -57,12 +75,15 @@ curl -s localhost:8000/query -H 'content-type: application/json' \
 ## UI — a multipage Streamlit console
 
 `make ui` starts a polished, **multipage** Streamlit client over the API (a thin
-client — every action is an HTTP call). Four pages share one session:
+client — every action is an HTTP call). Five pages share one session:
 
 - **Ask** — chat-first grounded Q&A: tinted `[n]` citations, a per-answer
   telemetry strip (retrieval-vs-generation latency, cost, tokens, contexts), an
   `⚡ Cache hit` badge, `k` control, document upload (`.md/.txt/.html/.pdf`) and
   re-index.
+- **Corpus** — browse the indexed source documents: each file's type, size and
+  chunk count, plus a viewer showing the extracted text and the chunks the vector
+  store actually holds.
 - **Analytics** — a filterable dashboard over the query traces: cost/latency/token
   time-series, a latency histogram, a most-retrieved-documents chart, a scatter,
   and an exportable query log.
@@ -106,11 +127,12 @@ src/rag_lc/
   pipeline.py     retrieve -> format context -> LCEL chain -> trace -> Answer
   observability.py per-query traces (tokens, cost, latency) + records/aggregate
   pipeline.py     retrieve -> LCEL chain -> trace -> Answer (+ LRU answer cache)
-  api.py          FastAPI: /health /ingest /upload /query /metrics /analytics /eval-results
+  api.py          FastAPI: /health /ingest /upload /query /metrics /analytics /eval-results /documents
 ui/
   streamlit_app.py  multipage router (st.navigation, thin client over the API)
   common.py         shared config, styling and API helpers
   views/chat.py     grounded chat with citations + telemetry
+  views/corpus.py    browse the indexed source documents (files + chunks)
   views/analytics.py filterable charts over the query traces
   views/evaluation.py read-only dashboard of the eval reports (retrieval + Ragas + A/B)
   views/guide.py    in-app tutorial: how to use the app + what every metric means
@@ -131,7 +153,7 @@ tests/            keyless end-to-end tests
   usage is captured via LangChain's usage-metadata callback (real on OpenAI,
   word-count-approximated on the keyless/local paths, which cost $0).
 - **Same feature set and UI/UX** as the from-scratch repo: the multipage console
-  (Ask/Analytics/Evaluation/Guide), an **LRU answer cache** (repeat questions are
+  (Ask/Corpus/Analytics/Evaluation/Guide), an **LRU answer cache** (repeat questions are
   free, marked `⚡`), an evaluation harness that writes reports for the Evaluation
   dashboard, and API hardening (a request-size guard, threadpool re-index, and a
   lock-guarded pipeline singleton).
