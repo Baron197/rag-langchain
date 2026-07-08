@@ -143,10 +143,10 @@ src/rag_lc/
   components.py   factories: Embeddings, ChatModel, vector store, retriever
                   (+ keyless KeywordHashEmbeddings & FakeGroundedChatModel)
   ingest.py       RecursiveCharacterTextSplitter -> chunk Documents
-  pipeline.py     retrieve -> format context -> LCEL chain -> trace -> Answer
+  schemas.py      Citation & Answer result records returned by the pipeline / API
+  pipeline.py     retrieve -> format context -> LCEL chain -> trace -> Answer (+ LRU answer cache)
   observability.py per-query traces (tokens, cost, latency) + records/aggregate
-  pipeline.py     retrieve -> LCEL chain -> trace -> Answer (+ LRU answer cache)
-  api.py          FastAPI: /health /ingest /upload /query /metrics /analytics /eval-results /documents
+  api.py          FastAPI: /health /ingest /upload /query /metrics /analytics /eval-results /documents /documents/{name}
 ui/
   streamlit_app.py  multipage router (st.navigation, thin client over the API)
   common.py         shared config, styling and API helpers
