@@ -58,12 +58,18 @@ CI run with **no API key**.
 ```bash
 pip install -r requirements.txt
 cp .env.example .env          # defaults to the keyless 'fake' providers
-make api                      # http://localhost:8000  (docs at /docs)
-make ui                       # http://localhost:8501  (second terminal)
-make test                     # keyless tests
-make eval NO_RAGAS=1          # recall@k / recall@1 / MRR (writes a report)
-make eval-compare             # vector vs hybrid A/B
+uvicorn src.rag_lc.api:app --reload --port 8000   # API → http://localhost:8000  (docs at /docs)
+streamlit run ui/streamlit_app.py                 # UI → http://localhost:8501  (second terminal)
+pytest -q                                         # keyless tests
+python -m eval.run_eval --no-ragas                # recall@k / recall@1 / MRR (writes a report)
+python -m eval.run_eval --compare                 # vector vs hybrid A/B
 ```
+
+> **On Windows, or no `make`?** Run the commands above directly — the `Makefile`
+> is just optional shorthand. Map: `make api` → `uvicorn src.rag_lc.api:app --reload --port 8000`,
+> `make ui` → `streamlit run ui/streamlit_app.py`, `make test` → `pytest -q`,
+> `make eval` → `python -m eval.run_eval` (`--no-ragas` to skip Ragas),
+> `make eval-compare` → `python -m eval.run_eval --compare`.
 
 Ask a question:
 
@@ -74,7 +80,7 @@ curl -s localhost:8000/query -H 'content-type: application/json' \
 
 ## UI — a multipage Streamlit console
 
-`make ui` starts a polished, **multipage** Streamlit client over the API (a thin
+`streamlit run ui/streamlit_app.py` starts a polished, **multipage** Streamlit client over the API (a thin
 client — every action is an HTTP call). Five pages share one session:
 
 - **Ask** — chat-first grounded Q&A: tinted `[n]` citations, a per-answer
