@@ -64,6 +64,16 @@ class RAGPipelineLC:
             while len(self._cache) > self.settings.cache_size:
                 self._cache.popitem(last=False)
 
+    def _retriever_for(self, top: int):
+        """The shared retriever, or a per-query one when `k` overrides the default
+        `top_k` -- so a larger k actually retrieves more (matching the from-scratch
+        product) instead of being silently capped by the pre-built retriever."""
+        if top == self.settings.top_k:
+            return self.retriever
+        return build_retriever(
+            self.settings.model_copy(update={"top_k": top}), self.vectorstore, self.docs
+        )
+
     def answer(self, question: str, k: int | None = None) -> Answer:
         """Retrieve context, generate a grounded answer, and record a trace."""
         timings: dict[str, float] = {}
@@ -78,7 +88,7 @@ class RAGPipelineLC:
                                latency_ms=0.0, timings_ms={"cache_hit": 0.0})
 
         t0 = perf_counter()
-        docs = list(self.retriever.invoke(question))[:top]
+        docs = list(self._retriever_for(top).invoke(question))[:top]
         timings["retrieval"] = round((perf_counter() - t0) * 1000, 2)
 
         context = self._format(docs) if docs else "(no relevant context found)"

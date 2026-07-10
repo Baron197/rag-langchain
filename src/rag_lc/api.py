@@ -16,6 +16,7 @@ handlers in a threadpool, so build/reset could otherwise race).
 """
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import threading
@@ -39,6 +40,17 @@ app = FastAPI(title="RAG Knowledge Assistant (LangChain variant)", version="0.4.
 # /upload). Guarded by a lock against threadpool races.
 _pipeline: RAGPipelineLC | None = None
 _pipeline_lock = threading.Lock()
+# Serialises index rebuilds: /ingest and /upload each construct a fresh pipeline
+# with reset_index=True, which on the pgvector backend DROPS and rewrites the
+# shared collection. Two overlapping rebuilds could interleave those writes, so
+# only one runs at a time.
+_ingest_lock = threading.Lock()
+
+
+def _rebuild_pipeline() -> RAGPipelineLC:
+    """Rebuild the index under `_ingest_lock` so concurrent rebuilds can't race."""
+    with _ingest_lock:
+        return RAGPipelineLC(reset_index=True)
 
 # Documents the loader can read (see ingest._read_file).
 ALLOWED_SUFFIXES = {".md", ".txt", ".html", ".htm", ".pdf"}
@@ -118,7 +130,7 @@ def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
     unchanged. When set, requests must carry a matching `X-API-Key` header;
     otherwise 401. Read-only endpoints and /health stay open."""
     expected = get_settings().api_key
-    if expected and x_api_key != expected:
+    if expected and not hmac.compare_digest(x_api_key or "", expected):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
@@ -127,7 +139,7 @@ def run_ingest() -> dict:
     """Rebuild the in-memory index from DOCS_DIR (re-load + re-split + re-embed)."""
     try:
         # reset_index=True re-embeds and (on pgvector) rewrites the collection.
-        p = RAGPipelineLC(reset_index=True)  # sync handler -> runs in FastAPI's threadpool
+        p = _rebuild_pipeline()  # sync handler -> runs in FastAPI's threadpool (serialised)
     except Exception as exc:  # noqa: BLE001
         logger.exception("ingestion failed")
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}") from exc
@@ -166,7 +178,7 @@ async def upload(files: Annotated[list[UploadFile], File(...)]) -> dict:
             detail=f"No supported files uploaded. Allowed: {sorted(ALLOWED_SUFFIXES)}",
         )
     try:
-        p = await run_in_threadpool(lambda: RAGPipelineLC(reset_index=True))  # rebuild off event loop
+        p = await run_in_threadpool(_rebuild_pipeline)  # rebuild off event loop (serialised)
     except Exception as exc:  # noqa: BLE001
         logger.exception("ingestion after upload failed")
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}") from exc

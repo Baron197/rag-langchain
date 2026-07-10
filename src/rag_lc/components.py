@@ -78,7 +78,10 @@ class FakeGroundedChatModel(SimpleChatModel):
         for m in messages:
             if m.type == "human":
                 human = m.content if isinstance(m.content, str) else str(m.content)
-        if "(no relevant context found)" in human:
+        # Match the full "no context" block the prompt emits (HUMAN_TEMPLATE), not a
+        # bare substring — otherwise a question or passage that happens to contain
+        # this phrase would spuriously trigger the refusal.
+        if "Context passages:\n\n(no relevant context found)\n\n" in human:
             return "I don't have enough information in the documentation to answer that."
         snippet = ""
         if "[1]" in human:
@@ -169,7 +172,9 @@ def build_retriever(settings: Settings, vectorstore: VectorStore, docs: list[Doc
     `EnsembleRetriever` (reciprocal-rank-fusion style weighting).
     """
     vector_retriever = vectorstore.as_retriever(search_kwargs={"k": settings.top_k})
-    if settings.retrieval_mode != "hybrid":
+    # `not docs`: an empty corpus can't build a BM25 index -- fall back to the
+    # (empty) vector retriever, which returns [] and drives the standard refusal.
+    if settings.retrieval_mode != "hybrid" or not docs:
         return vector_retriever
 
     # EnsembleRetriever moved to `langchain_classic` in LangChain v1; support both.
