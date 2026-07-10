@@ -12,10 +12,9 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 > This is a **companion** to my framework-free RAG project (a sibling repo built
-> from scratch with no framework). Building the same system both ways — with the
-> **same product, UI/UX and feature set** — shows two things employers value: I
-> can implement RAG from first principles **and** ship it idiomatically with
-> LangChain.
+> from scratch with no framework). Building the same system both ways — same
+> **product, UI/UX and feature set** — is a deliberate exercise: implement RAG
+> from first principles, then ship it idiomatically with LangChain.
 
 ---
 
@@ -80,7 +79,7 @@ curl -s localhost:8000/query -H 'content-type: application/json' \
 
 ## UI — a multipage Streamlit console
 
-`streamlit run ui/streamlit_app.py` starts a polished, **multipage** Streamlit client over the API (a thin
+`streamlit run ui/streamlit_app.py` starts a **multipage** Streamlit client over the API (a thin
 client — every action is an HTTP call). Five pages share one session:
 
 - **Ask** — chat-first grounded Q&A: tinted `[n]` citations, a per-answer

@@ -275,7 +275,8 @@ if compare_runs:
     st.dataframe(pd.DataFrame(delta_rows), hide_index=True, use_container_width=True)
     st.caption(f"From `{comp.get('_name', 'compare')}` · embedding="
                f"`{(comp.get('providers', {}) or {}).get('embedding', '?')}`. "
-               "On real semantic embeddings hybrid's edge is typically larger.")
+               "On a small clean corpus vector recall often saturates, so hybrid mainly "
+               "helps on exact-token queries (error codes, API names) and larger corpora.")
 else:
     st.info("No A/B comparison yet — run `python -m eval.run_eval --compare` to generate one.")
 
