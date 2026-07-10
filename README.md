@@ -11,8 +11,8 @@
 ![API](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-> This is a **companion** to my framework-free RAG project (a sibling repo built
-> from scratch with no framework). Building the same system both ways — same
+> This is a **companion** to my [framework-free RAG project](https://github.com/Baron197/rag-knowledge-assistant)
+> (a sibling repo built from scratch with no framework). Building the same system both ways — same
 > **product, UI/UX and feature set** — is a deliberate exercise: implement RAG
 > from first principles, then ship it idiomatically with LangChain.
 
