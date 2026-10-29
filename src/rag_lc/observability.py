@@ -38,13 +38,16 @@ class Trace:
     """The structured record of a single query. Serialised to one JSON line."""
 
     question: str
-    timings_ms: dict[str, float] = field(default_factory=dict)  # retrieval/generation
-    tokens: dict[str, int] = field(default_factory=dict)        # prompt/completion
+    timings_ms: dict[str, float] = field(default_factory=dict)  # (rewrite/)retrieval/generation
+    tokens: dict[str, int] = field(default_factory=dict)        # prompt/completion(/rewrite)
     cost_usd: float = 0.0
     n_contexts: int = 0
     retrieval_mode: str = "vector"
     sources: list[str] = field(default_factory=list)
     answer: str = ""
+    # What was actually searched -- differs from `question` when a follow-up was
+    # rewritten against the chat history. Logged so a bad rewrite is debuggable.
+    standalone_question: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a plain dict (with a wall-clock timestamp) for logging."""
@@ -58,6 +61,7 @@ class Trace:
             "retrieval_mode": self.retrieval_mode,
             "sources": self.sources,
             "answer": self.answer,
+            "standalone_question": self.standalone_question or self.question,
         }
 
 

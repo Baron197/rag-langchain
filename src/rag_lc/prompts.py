@@ -6,7 +6,7 @@ not contain the answer.
 """
 from __future__ import annotations
 
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 SYSTEM_PROMPT = (
     "You are a precise documentation assistant. Answer the user's question using "
@@ -25,4 +25,27 @@ HUMAN_TEMPLATE = (
 # The chat prompt used by the LCEL generation chain (prompt | llm | parser).
 RAG_PROMPT = ChatPromptTemplate.from_messages(
     [("system", SYSTEM_PROMPT), ("human", HUMAN_TEMPLATE)]
+)
+
+# Follow-up rewriting (see conversation.py). The model only RESOLVES references in
+# the latest question using the conversation; it must not answer or add facts, and
+# the history is never shown to the answering step as evidence.
+CONDENSE_SYSTEM_PROMPT = (
+    "You rewrite the user's latest question into a standalone question for a "
+    "documentation search engine. Use the conversation ONLY to resolve references "
+    "(pronouns such as 'it', 'they' or 'that', and omitted subjects). Rules:\n"
+    "1. Do not answer the question.\n"
+    "2. Do not add details the conversation does not state.\n"
+    "3. If the question already stands on its own, return it unchanged.\n"
+    "4. Reply with the standalone question only: one line, no quotes, no preamble."
+)
+
+# The prior turns arrive as real chat messages via MessagesPlaceholder -- the same
+# shape LangChain's create_history_aware_retriever uses.
+CONDENSE_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", CONDENSE_SYSTEM_PROMPT),
+        MessagesPlaceholder("chat_history"),
+        ("human", "Latest question: {question}\n\nStandalone question:"),
+    ]
 )

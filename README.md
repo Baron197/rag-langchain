@@ -42,9 +42,10 @@ strip (latency split · cost · contexts · tokens), and the retrieved source pa
 |---|---|
 | Prompt | `ChatPromptTemplate` (system + human) with the grounding/citation/refusal rules |
 | Generation | an **LCEL** chain: `prompt | chat_model | StrOutputParser()` |
+| Follow-ups | a second LCEL chain, `CONDENSE_PROMPT | chat_model | StrOutputParser()`, with `MessagesPlaceholder("chat_history")` — rewrites a follow-up into a standalone question before retrieval (the history-aware-retriever pattern) |
 | Chat model | `ChatOpenAI` / `ChatHuggingFace`, or a keyless `SimpleChatModel` (`FakeGroundedChatModel`) |
 | Embeddings | `OpenAIEmbeddings` / `HuggingFaceEmbeddings`, or a keyless `Embeddings` subclass (`KeywordHashEmbeddings`) |
-| Vector store | `InMemoryVectorStore` (zero external services) |
+| Vector store | `InMemoryVectorStore` (zero external services), or `PGVector` (persistent) |
 | Retriever | `vectorstore.as_retriever()`, or hybrid `EnsembleRetriever([BM25Retriever, vector])` |
 | Chunking | `RecursiveCharacterTextSplitter` |
 
@@ -77,13 +78,26 @@ curl -s localhost:8000/query -H 'content-type: application/json' \
   -d '{"question":"What webhook events does Nimbus emit?"}' | python -m json.tool
 ```
 
+Ask a follow-up — send the recent conversation so *they* can be resolved (the
+response's `standalone_question` shows what was actually searched):
+
+```bash
+curl -s localhost:8000/query -H 'content-type: application/json' \
+  -d '{"question":"How do I verify they really came from Nimbus?",
+       "history":[{"role":"user","content":"What webhook events does Nimbus emit?"},
+                  {"role":"assistant","content":"message.queued, message.delivered, message.bounced, message.opened"}]}' \
+  | python -m json.tool
+```
+
 ## UI — a multipage Streamlit console
 
 `streamlit run ui/streamlit_app.py` starts a **multipage** Streamlit client over the API (a thin
 client — every action is an HTTP call). Five pages share one session:
 
-- **Ask** — chat-first grounded Q&A: tinted `[n]` citations, a per-answer
-  telemetry strip (retrieval-vs-generation latency, cost, tokens, contexts), an
+- **Ask** — chat-first grounded Q&A with **follow-up questions** (the recent
+  conversation is sent along, and the rewritten *searched as* query is shown):
+  tinted `[n]` citations, a per-answer telemetry strip (rewrite/retrieval/generation
+  latency, cost, tokens, contexts), an
   `⚡ Cache hit` badge, `k` control, document upload (`.md/.txt/.html/.pdf`) and
   re-index.
 - **Corpus** — browse the indexed source documents: each file's type, size and
@@ -94,7 +108,8 @@ client — every action is an HTTP call). Five pages share one session:
   and an exportable query log.
 - **Evaluation** — a read-only dashboard over the eval reports: retrieval metrics,
   Ragas generation metrics (on the OpenAI path), a vector-vs-hybrid A/B chart, a
-  metric trend across runs, and a per-question pass/fail table.
+  follow-up A/B (without vs with chat history), a metric trend across runs, and a
+  per-question pass/fail table.
 - **Guide** — an in-app tutorial explaining how to use the app and what every
   metric and evaluation number means.
 
@@ -120,6 +135,28 @@ Set `RETRIEVAL_MODE=hybrid` to fuse **BM25** (keyword) with the **vector**
 retriever via LangChain's `EnsembleRetriever` (reciprocal-rank-fusion style
 weighting) — better ranking for exact tokens like error codes and API names.
 
+## Follow-up questions
+
+The chat sends its last few messages with each question. A cheap deterministic
+gate checks whether the question leans on them (*it*, *they*, *what about…*); if
+so, the LCEL condense chain rewrites it into a standalone question, and **that** is
+what gets retrieved. A self-contained question skips the rewrite (no extra model
+call, and it still hits the answer cache). History only resolves references — the
+answer stays grounded in the retrieved passages, and a forged `"system"` turn is
+rejected with `422`. On the keyless path the fake chat model can't rewrite, so a
+deterministic heuristic prepends the earlier question instead.
+
+Measured on 7 multi-turn conversations (`eval/golden_multiturn.jsonl`), keyless
+run (vector mode, heuristic rewrite):
+
+| Metric | without history | with history |
+|---|---|---|
+| Context recall@k | 0.857 | 1.0 |
+| Recall@1 | 0.714 | 0.857 |
+| MRR | 0.762 | 0.893 |
+
+`HISTORY_WINDOW` (default 6 messages) sets how much history is used; `0` turns it off.
+
 ## Deploy — Docker & free-tier cloud
 
 The full stack — Postgres + `pgvector` (`langchain-postgres`), the API, and the
@@ -144,12 +181,13 @@ runs natively on Oracle's ARM instances.
 ```
 src/rag_lc/
   config.py       typed settings (pydantic-settings); defaults = keyless fake
-  prompts.py      ChatPromptTemplate (grounding / citation / refusal)
+  prompts.py      ChatPromptTemplate (grounding / citation / refusal) + CONDENSE_PROMPT (follow-ups)
+  conversation.py follow-up helpers: history normalisation, gate, keyless heuristic rewrite
   components.py   factories: Embeddings, ChatModel, vector store, retriever
                   (+ keyless KeywordHashEmbeddings & FakeGroundedChatModel)
   ingest.py       RecursiveCharacterTextSplitter -> chunk Documents
   schemas.py      Citation & Answer result records returned by the pipeline / API
-  pipeline.py     retrieve -> format context -> LCEL chain -> trace -> Answer (+ LRU answer cache)
+  pipeline.py     (rewrite) -> retrieve -> format context -> LCEL chain -> trace -> Answer (+ LRU answer cache)
   observability.py per-query traces (tokens, cost, latency) + records/aggregate
   api.py          FastAPI: /health /ingest /upload /query /metrics /analytics /eval-results /documents /documents/{name}
 ui/
@@ -161,7 +199,7 @@ ui/
   views/evaluation.py read-only dashboard of the eval reports (retrieval + Ragas + A/B)
   views/guide.py    in-app tutorial: how to use the app + what every metric means
 data/docs/        the same "Nimbus" demo corpus
-eval/             golden set + retrieval/Ragas/A-B harness -> eval/results (+ CI gate)
+eval/             golden sets (single + multi-turn) + retrieval/Ragas/A-B harness -> eval/results (+ CI gate)
 tests/            keyless end-to-end tests
 ```
 
@@ -171,6 +209,10 @@ tests/            keyless end-to-end tests
   and the LCEL chain (the from-scratch repo hand-writes all of these).
 - The keyless mode is implemented as **real LangChain classes** (a custom
   `Embeddings` and a `SimpleChatModel`), so it stays framework-idiomatic.
+- **Follow-ups** pass the history to the model as real chat messages via
+  `MessagesPlaceholder` (the history-aware-retriever pattern), where the
+  from-scratch repo flattens it into a hand-written rewrite prompt. The gate, the
+  cache key, the heuristic fallback and the eval A/B are identical in both.
 - Mirrors the from-scratch repo's **observability**: every query is traced
   (retrieval vs generation timing, tokens, USD cost) and rolled up at `/metrics`,
   exposed per-query at `/analytics`, and charted on the Analytics page. Token

@@ -6,9 +6,15 @@ produce a grounded, cited answer (or a refusal). It also records a structured
 trace per query (retrieval vs generation timing, tokens, USD cost) so the same
 "production" observability story as the from-scratch repo holds here. Returns a
 structured `Answer` with citations, latency, tokens and cost.
+
+Follow-up questions are supported by passing the recent chat `history`: a second
+LCEL chain (`CONDENSE_PROMPT | chat_model | parser`) rewrites the follow-up into
+a standalone question before retrieval (see conversation.py). History is never
+used as evidence for the answer.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from collections import OrderedDict
 from dataclasses import replace
@@ -18,16 +24,28 @@ from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 
 from .components import (
+    FakeGroundedChatModel,
     build_retriever,
     build_vectorstore,
     get_chat_model,
     get_embeddings,
 )
 from .config import Settings, get_settings
+from .conversation import (
+    MAX_REWRITE_CHARS,
+    clean_rewrite,
+    heuristic_rewrite,
+    history_key,
+    needs_rewrite,
+    normalize_history,
+    to_messages,
+)
 from .ingest import load_and_split
 from .observability import Trace, Tracer, cost_usd
-from .prompts import RAG_PROMPT
+from .prompts import CONDENSE_PROMPT, RAG_PROMPT
 from .schemas import Answer, Citation
+
+logger = logging.getLogger("rag_lc.pipeline")
 
 
 class RAGPipelineLC:
@@ -46,6 +64,8 @@ class RAGPipelineLC:
         self.chat_model = get_chat_model(self.settings)
         # The LCEL generation chain: prompt -> chat model -> string output.
         self.gen_chain = RAG_PROMPT | self.chat_model | StrOutputParser()
+        # The follow-up rewrite chain: history + question -> standalone question.
+        self.condense_chain = CONDENSE_PROMPT | self.chat_model | StrOutputParser()
         self.tracer = Tracer(self.settings.trace_dir)
         # LRU cache of recent answers, guarded by a lock for thread-safety.
         self._cache: OrderedDict[tuple, Answer] = OrderedDict()
@@ -64,6 +84,11 @@ class RAGPipelineLC:
             while len(self._cache) > self.settings.cache_size:
                 self._cache.popitem(last=False)
 
+    def clear_cache(self) -> None:
+        """Drop every cached answer (e.g. between eval runs, for clean cost/latency)."""
+        with self._cache_lock:
+            self._cache.clear()
+
     def _retriever_for(self, top: int):
         """The shared retriever, or a per-query one when `k` overrides the default
         `top_k` -- so a larger k actually retrieves more (matching the from-scratch
@@ -74,32 +99,59 @@ class RAGPipelineLC:
             self.settings.model_copy(update={"top_k": top}), self.vectorstore, self.docs
         )
 
-    def answer(self, question: str, k: int | None = None) -> Answer:
-        """Retrieve context, generate a grounded answer, and record a trace."""
+    def answer(
+        self, question: str, k: int | None = None, history: list[dict] | None = None
+    ) -> Answer:
+        """(Rewrite a follow-up,) retrieve context, generate a grounded answer, trace.
+
+        `history` is the recent conversation, oldest first, as
+        ``[{"role": "user" | "assistant", "content": str}, ...]``. It only turns a
+        follow-up into a standalone question; the answer is grounded in the
+        retrieved passages alone.
+        """
         timings: dict[str, float] = {}
         top = k or self.settings.top_k
+        turns = normalize_history(history, self.settings.history_window)
+        # Only a question that leans on earlier turns ("does deleting IT ...?") is
+        # rewritten; a standalone one ignores the history (no rewrite call, and it
+        # shares the single-turn cache entry). A follow-up's key includes the raw
+        # history, so nothing is spent before the lookup and every hit is free.
+        follow_up = needs_rewrite(question, turns)
+        key = (question, top, history_key(turns) if follow_up else ())
 
         if self.settings.enable_cache:
-            hit = self._cache_get((question, top))
+            hit = self._cache_get(key)
             if hit is not None:
                 # Served from cache: free and instant. Not traced, so /metrics and
                 # /analytics reflect real (uncached) query cost and latency.
                 return replace(hit, cost_usd=0.0, cached=True,
                                latency_ms=0.0, timings_ms={"cache_hit": 0.0})
 
+        search_question, rewrite_pt, rewrite_ct = question, 0, 0
+        if follow_up:
+            tr = perf_counter()
+            search_question, rewrite_pt, rewrite_ct = self._rewrite(question, turns)
+            timings["rewrite"] = round((perf_counter() - tr) * 1000, 2)
+
         t0 = perf_counter()
-        docs = list(self._retriever_for(top).invoke(question))[:top]
+        docs = list(self._retriever_for(top).invoke(search_question))[:top]
         timings["retrieval"] = round((perf_counter() - t0) * 1000, 2)
 
         context = self._format(docs) if docs else "(no relevant context found)"
-        inputs = {"context": context, "question": question}
+        inputs = {"context": context, "question": search_question}
 
         t1 = perf_counter()
         text, prompt_tokens, completion_tokens = self._generate(inputs)
         timings["generation"] = round((perf_counter() - t1) * 1000, 2)
         text = text.strip()
 
-        cost = cost_usd(self._model_label(), prompt_tokens, completion_tokens)
+        # The rewrite ran on the same chat model, so it is priced the same way.
+        cost = cost_usd(self._model_label(), prompt_tokens, completion_tokens) + cost_usd(
+            self._model_label(), rewrite_pt, rewrite_ct
+        )
+        tokens = {"prompt": prompt_tokens, "completion": completion_tokens}
+        if follow_up:
+            tokens["rewrite"] = rewrite_pt + rewrite_ct
         citations = self._citations(docs)
         latency_ms = round(sum(timings.values()), 2)
 
@@ -107,12 +159,13 @@ class RAGPipelineLC:
             Trace(
                 question=question,
                 timings_ms=timings,
-                tokens={"prompt": prompt_tokens, "completion": completion_tokens},
+                tokens=tokens,
                 cost_usd=cost,
                 n_contexts=len(docs),
                 retrieval_mode=self.settings.retrieval_mode,
                 sources=[c.source for c in citations],
                 answer=text,
+                standalone_question=search_question,
             )
         )
         ans = Answer(
@@ -123,37 +176,69 @@ class RAGPipelineLC:
             retrieval_mode=self.settings.retrieval_mode,
             latency_ms=latency_ms,
             cost_usd=cost,
-            tokens={"prompt": prompt_tokens, "completion": completion_tokens},
+            tokens=tokens,
             timings_ms=timings,
             cached=False,
+            standalone_question=search_question,
         )
         if self.settings.enable_cache:
-            self._cache_put((question, top), ans)
+            self._cache_put(key, ans)
         return ans
 
     def _generate(self, inputs: dict) -> tuple[str, int, int]:
-        """Run the LCEL chain and return (text, prompt_tokens, completion_tokens).
+        """Run the generation chain: (answer_text, prompt_tokens, completion_tokens)."""
+        return self._invoke_counted(self.gen_chain, RAG_PROMPT, inputs)
+
+    def _rewrite(self, question: str, turns: list[dict[str, str]]) -> tuple[str, int, int]:
+        """Resolve a follow-up: (standalone_question, prompt_tokens, completion_tokens).
+
+        The keyless fake chat model can't rewrite, so it uses the deterministic
+        heuristic (no call, 0 tokens). A real model runs the LCEL condense chain;
+        an empty/overlong reply falls back to the heuristic (keeping the tokens it
+        cost), and a provider error falls back too, so a rewrite never fails a query.
+        """
+        if isinstance(self.chat_model, FakeGroundedChatModel):
+            return heuristic_rewrite(question, turns), 0, 0
+        inputs = {"chat_history": to_messages(turns), "question": question}
+        try:
+            text, pt, ct = self._invoke_counted(self.condense_chain, CONDENSE_PROMPT, inputs)
+        except Exception:  # noqa: BLE001 -- a failed rewrite must not fail the whole query
+            logger.warning("follow-up rewrite failed; using the heuristic", exc_info=True)
+            return heuristic_rewrite(question, turns), 0, 0
+        standalone = clean_rewrite(text)
+        if not standalone or len(standalone) > MAX_REWRITE_CHARS:
+            return heuristic_rewrite(question, turns), pt, ct
+        return standalone, pt, ct
+
+    @staticmethod
+    def _invoke_counted(chain, prompt, inputs: dict) -> tuple[str, int, int]:
+        """Run an LCEL chain and return (text, prompt_tokens, completion_tokens).
 
         Real token usage is captured when the provider reports it (e.g. OpenAI) via
         LangChain's usage-metadata callback; on the keyless `fake`/local `hf` paths
         no usage is reported, so we fall back to a word-count approximation (which
-        still costs $0). This keeps the LCEL chain itself unchanged.
+        still costs $0). This keeps the LCEL chains themselves unchanged.
+
+        Only the *import* is guarded: a provider error from `invoke` propagates once
+        instead of being caught and silently re-invoked (a second paid call).
         """
         try:
             from langchain_core.callbacks import get_usage_metadata_callback
+        except ImportError:  # older langchain-core without the callback
+            get_usage_metadata_callback = None
 
+        if get_usage_metadata_callback is None:
+            text, usage = chain.invoke(inputs), {}
+        else:
             with get_usage_metadata_callback() as cb:
-                text = self.gen_chain.invoke(inputs)
+                text = chain.invoke(inputs)
             usage = cb.usage_metadata  # {model_name: {input_tokens, output_tokens, ...}}
-        except Exception:  # noqa: BLE001 -- older langchain-core without the callback
-            text = self.gen_chain.invoke(inputs)
-            usage = {}
 
         prompt_tokens = sum(u.get("input_tokens", 0) for u in usage.values())
         completion_tokens = sum(u.get("output_tokens", 0) for u in usage.values())
         if prompt_tokens == 0 and completion_tokens == 0:
             # No usage reported (fake/hf) -> approximate from text so counts are nonzero.
-            prompt_tokens = len(RAG_PROMPT.invoke(inputs).to_string().split())
+            prompt_tokens = len(prompt.invoke(inputs).to_string().split())
             completion_tokens = len(text.split())
         return text, prompt_tokens, completion_tokens
 

@@ -25,5 +25,8 @@ class Answer:
     latency_ms: float
     cost_usd: float = 0.0
     tokens: dict[str, int] = field(default_factory=dict)      # prompt / completion
-    timings_ms: dict[str, float] = field(default_factory=dict)  # retrieval / generation
+    timings_ms: dict[str, float] = field(default_factory=dict)  # (rewrite /) retrieval / generation
     cached: bool = False  # True when served from the LRU answer cache (cost 0)
+    # The question actually searched: the user's question, or its standalone
+    # rewrite when it was a follow-up resolved against the chat history.
+    standalone_question: str = ""

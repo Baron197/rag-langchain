@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     pg_dsn: str = "postgresql://rag:rag@localhost:5432/rag"
     pg_collection: str = "rag_lc_docs"
 
+    # Conversation: how many of the most recent chat messages (user + assistant)
+    # are used to resolve a follow-up ("does deleting it take effect
+    # immediately?") into a standalone question. 0 = every question is standalone.
+    history_window: int = 6
+
     # Answer cache (LRU): repeated questions are served from memory at zero cost.
     enable_cache: bool = True
     cache_size: int = 256

@@ -5,6 +5,7 @@ Endpoints:
   POST /ingest       -> rebuild the in-memory index from DOCS_DIR
   POST /upload       -> save uploaded file(s) into DOCS_DIR, then re-index
   POST /query        -> grounded answer with citations, tokens, cost and latency
+                        (send the recent chat `history` to resolve follow-ups)
   GET  /metrics      -> aggregate cost/latency/throughput from recorded traces
   GET  /analytics    -> per-query trace records for the analytics dashboard
   GET  /eval-results -> evaluation reports (retrieval/Ragas/A-B) for the eval dashboard
@@ -21,7 +22,7 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -86,9 +87,24 @@ def _set_pipeline(p: RAGPipelineLC) -> None:
         _pipeline = p
 
 
+class ChatTurn(BaseModel):
+    """One earlier chat message, sent so a follow-up question can be resolved.
+
+    `role` is restricted to user/assistant, so a caller can't inject a "system"
+    turn. History only steers the follow-up rewrite -- it is never used as
+    evidence for the answer, which stays grounded in the retrieved passages.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str = Field(..., max_length=8000)
+
+
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     k: int | None = Field(default=None, ge=1, le=20)
+    # Recent conversation, oldest first. Omit (or send []) for a single-turn
+    # question; only the last HISTORY_WINDOW messages are used.
+    history: list[ChatTurn] = Field(default_factory=list, max_length=50)
 
 
 class CitationModel(BaseModel):
@@ -108,6 +124,8 @@ class QueryResponse(BaseModel):
     tokens: dict
     timings_ms: dict
     cached: bool
+    # The question actually searched (the follow-up rewrite, or the question as-is).
+    standalone_question: str
 
 
 @app.get("/health")
@@ -189,7 +207,9 @@ async def upload(files: Annotated[list[UploadFile], File(...)]) -> dict:
 @app.post("/query", response_model=QueryResponse, dependencies=[Depends(require_api_key)])
 def query(req: QueryRequest) -> QueryResponse:
     try:
-        ans = get_pipeline().answer(req.question, req.k)
+        ans = get_pipeline().answer(
+            req.question, req.k, history=[t.model_dump() for t in req.history]
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("query failed")
         raise HTTPException(status_code=500, detail=f"Query failed: {exc}") from exc
@@ -204,6 +224,7 @@ def query(req: QueryRequest) -> QueryResponse:
         tokens=ans.tokens,
         timings_ms=ans.timings_ms,
         cached=ans.cached,
+        standalone_question=ans.standalone_question or ans.question,
     )
 
 
@@ -229,6 +250,7 @@ def analytics(limit: int = 2000) -> dict:
             "cost_usd": r.get("cost_usd", 0.0),
             "n_contexts": r.get("n_contexts", 0),
             "sources": r.get("sources", []),
+            "standalone_question": r.get("standalone_question") or r.get("question", ""),
         }
         for r in rows
     ]
