@@ -8,12 +8,33 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.rag_lc.config import Settings  # noqa: E402
+from src.rag_lc.observability import cost_usd  # noqa: E402
 from src.rag_lc.pipeline import RAGPipelineLC  # noqa: E402
+
+
+class _UsageReportingChat(BaseChatModel):
+    """Stands in for ChatOpenAI: a canned reply that REPORTS its token usage on the
+    message (`usage_metadata`), the way langchain-openai does."""
+
+    @property
+    def _llm_type(self) -> str:
+        return "usage-stub"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        msg = AIMessage(
+            content="Stub answer [1].",
+            usage_metadata={"input_tokens": 321, "output_tokens": 12, "total_tokens": 333},
+        )
+        return ChatResult(generations=[ChatGeneration(message=msg)])
 
 
 def test_answer_carries_cost_tokens_timings(tmp_path):
@@ -29,6 +50,25 @@ def test_answer_carries_cost_tokens_timings(tmp_path):
     assert ans.cost_usd == 0.0                       # keyless fake path is free
     assert ans.tokens["prompt"] > 0                  # approximated from text
     assert set(ans.timings_ms) == {"retrieval", "generation"}
+
+
+def test_reported_token_usage_is_billed_exactly(tmp_path, monkeypatch):
+    """A provider that reports usage (OpenAI does) is billed on its real token counts,
+    not the word-count fallback -- on every langchain-core line, including the 0.2 line
+    the Ragas eval stack is pinned to."""
+    monkeypatch.setattr("src.rag_lc.pipeline.get_chat_model", lambda s: _UsageReportingChat())
+    s = Settings(
+        llm_provider="openai",            # priced as gpt-4o-mini; the model itself is stubbed
+        embedding_provider="fake",
+        docs_dir=Path("data/docs"),
+        trace_dir=tmp_path / "traces",
+        enable_cache=False,
+    )
+    ans = RAGPipelineLC(settings=s).answer("What does the Free plan include?")
+    assert ans.tokens["prompt"] == 321
+    assert ans.tokens["completion"] == 12
+    assert ans.cost_usd == pytest.approx(cost_usd("gpt-4o-mini", 321, 12))
+    assert ans.cost_usd > 0
 
 
 def _client(tmp_path, monkeypatch) -> TestClient:

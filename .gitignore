@@ -8,7 +8,13 @@ venv/
 
 # Generated at runtime (traces / eval reports / indexes)
 traces/
-eval/results/
+eval/results/*
+# Committed: real OpenAI runs, vector + hybrid, with the follow-up (chat history)
+# A/B -- so a fresh clone (and the live demo) has an Evaluation history to show.
+!eval/results/eval-20261029T030402Z.json
+!eval/results/eval-20261029T030402Z.md
+!eval/results/eval-20261029T030603Z.json
+!eval/results/eval-20261029T030603Z.md
 eval/traces/
 data/index/
 *.npz

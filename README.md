@@ -135,6 +135,35 @@ Set `RETRIEVAL_MODE=hybrid` to fuse **BM25** (keyword) with the **vector**
 retriever via LangChain's `EnsembleRetriever` (reciprocal-rank-fusion style
 weighting) — better ranking for exact tokens like error codes and API names.
 
+## Results — real OpenAI runs
+
+Two real runs are committed under [`eval/results/`](eval/results/) —
+`llm=openai · embedding=openai · memory store · k=4`, one per retrieval mode
+([vector](eval/results/eval-20261029T030402Z.md) ·
+[hybrid](eval/results/eval-20261029T030603Z.md)) — so a fresh clone's
+Evaluation page already has a run history to compare:
+
+| | vector | hybrid |
+|---|---|---|
+| Context recall@k (answerable) | **1.0** | **1.0** |
+| Recall@1 | **0.957** | 0.826 |
+| MRR | **0.978** | 0.906 |
+| Refusal accuracy (out-of-scope) | **1.0** | **1.0** |
+| Ragas faithfulness | 0.977 | 0.962 |
+| Ragas answer_relevancy | 0.915 | 0.958 |
+| Ragas context_precision | 0.934 | 0.946 |
+| Ragas context_recall | 1.0 | 1.0 |
+
+Averages: **~$0.00023 / query**, ~1.5–1.7 s latency, in both modes.
+
+> **Honest read:** on this small, well-separated corpus vector retrieval is
+> already near the ceiling, so fusing in BM25 mostly reshuffles near-ties — here
+> it costs Recall@1 (0.957 → 0.826). Hybrid earns its keep on exact-token queries
+> (error codes, IDs) and larger, noisier corpora; it's one env var, so measure it
+> on your own data. The from-scratch repo shows the same effect, smaller (its RRF
+> fusion: 1.0 → 0.957). Ragas scores come from an LLM judge and move by a few
+> hundredths between runs, so don't read the vector/hybrid Ragas gaps as signal.
+
 ## Follow-up questions
 
 The chat sends its last few messages with each question. A cheap deterministic
@@ -154,6 +183,17 @@ run (vector mode, heuristic rewrite):
 | Context recall@k | 0.857 | 1.0 |
 | Recall@1 | 0.714 | 0.857 |
 | MRR | 0.762 | 0.893 |
+
+And on the real OpenAI runs above, where the **condense chain** does the rewrite:
+
+| Metric | vector: without → with history | hybrid: without → with history |
+|---|---|---|
+| Context recall@k | 1.0 → 1.0 | 0.857 → **1.0** |
+| Recall@1 | 0.714 → **1.0** | 0.571 → **0.857** |
+| MRR | 0.833 → **1.0** | 0.679 → **0.905** |
+
+With history, every follow-up's source document is retrieved in both modes, and in
+vector mode each one ranks first.
 
 `HISTORY_WINDOW` (default 6 messages) sets how much history is used; `0` turns it off.
 
@@ -216,8 +256,10 @@ tests/            keyless end-to-end tests
 - Mirrors the from-scratch repo's **observability**: every query is traced
   (retrieval vs generation timing, tokens, USD cost) and rolled up at `/metrics`,
   exposed per-query at `/analytics`, and charted on the Analytics page. Token
-  usage is captured via LangChain's usage-metadata callback (real on OpenAI,
-  word-count-approximated on the keyless/local paths, which cost $0).
+  usage is read from the provider's `usage_metadata` by a small callback handler
+  — real on OpenAI on every langchain-core line, including the 0.2 line the Ragas
+  eval stack is pinned to (LangChain's own `get_usage_metadata_callback` needs
+  0.3.49+); word-count-approximated on the keyless/local paths, which cost $0.
 - **Same feature set and UI/UX** as the from-scratch repo: the multipage console
   (Ask/Corpus/Analytics/Evaluation/Guide), an **LRU answer cache** (repeat questions are
   free, marked `⚡`), an evaluation harness that writes reports for the Evaluation

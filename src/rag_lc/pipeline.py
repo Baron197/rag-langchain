@@ -20,6 +20,7 @@ from collections import OrderedDict
 from dataclasses import replace
 from time import perf_counter
 
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 
@@ -46,6 +47,27 @@ from .prompts import CONDENSE_PROMPT, RAG_PROMPT
 from .schemas import Answer, Citation
 
 logger = logging.getLogger("rag_lc.pipeline")
+
+
+class _UsageCounter(BaseCallbackHandler):
+    """Sums the token usage a chat model reports (`AIMessage.usage_metadata`) during
+    one chain run.
+
+    Same idea as langchain-core's `get_usage_metadata_callback`, which only exists
+    from 0.3.49 -- but the eval stack is pinned to the 0.2 line by Ragas 0.1.x, so a
+    plain callback handler keeps real OpenAI token counts on every supported line.
+    """
+
+    def __init__(self) -> None:
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+    def on_llm_end(self, response, **kwargs) -> None:
+        for generations in response.generations:
+            for gen in generations:
+                usage = getattr(getattr(gen, "message", None), "usage_metadata", None) or {}
+                self.prompt_tokens += usage.get("input_tokens", 0)
+                self.completion_tokens += usage.get("output_tokens", 0)
 
 
 class RAGPipelineLC:
@@ -214,28 +236,15 @@ class RAGPipelineLC:
     def _invoke_counted(chain, prompt, inputs: dict) -> tuple[str, int, int]:
         """Run an LCEL chain and return (text, prompt_tokens, completion_tokens).
 
-        Real token usage is captured when the provider reports it (e.g. OpenAI) via
-        LangChain's usage-metadata callback; on the keyless `fake`/local `hf` paths
-        no usage is reported, so we fall back to a word-count approximation (which
-        still costs $0). This keeps the LCEL chains themselves unchanged.
-
-        Only the *import* is guarded: a provider error from `invoke` propagates once
-        instead of being caught and silently re-invoked (a second paid call).
+        Real token usage is captured when the provider reports it (e.g. OpenAI) by a
+        callback handler (`_UsageCounter`) attached to this one run; on the keyless
+        `fake`/local `hf` paths no usage is reported, so we fall back to a word-count
+        approximation (which still costs $0). The LCEL chains themselves are unchanged,
+        and a provider error from `invoke` propagates once (never re-invoked).
         """
-        try:
-            from langchain_core.callbacks import get_usage_metadata_callback
-        except ImportError:  # older langchain-core without the callback
-            get_usage_metadata_callback = None
-
-        if get_usage_metadata_callback is None:
-            text, usage = chain.invoke(inputs), {}
-        else:
-            with get_usage_metadata_callback() as cb:
-                text = chain.invoke(inputs)
-            usage = cb.usage_metadata  # {model_name: {input_tokens, output_tokens, ...}}
-
-        prompt_tokens = sum(u.get("input_tokens", 0) for u in usage.values())
-        completion_tokens = sum(u.get("output_tokens", 0) for u in usage.values())
+        counter = _UsageCounter()
+        text = chain.invoke(inputs, config={"callbacks": [counter]})
+        prompt_tokens, completion_tokens = counter.prompt_tokens, counter.completion_tokens
         if prompt_tokens == 0 and completion_tokens == 0:
             # No usage reported (fake/hf) -> approximate from text so counts are nonzero.
             prompt_tokens = len(prompt.invoke(inputs).to_string().split())
